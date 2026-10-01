@@ -2035,7 +2035,8 @@ function callServer(action,payload,onOk,onErr){
   // External hosting: ยิงตรงไปยัง Apps Script backend เดิม
   // ใช้ text/plain เพื่อหลีกเลี่ยง CORS preflight ที่ไม่จำเป็น
   var controller = (typeof AbortController!=='undefined') ? new AbortController() : null;
-  var timer = setTimeout(function(){ if(controller) controller.abort(); }, 30000);
+  var timeoutMs = (action==='getStaffNames'||action==='getTodayStatus') ? 8000 : 30000;
+  var timer = setTimeout(function(){ if(controller) controller.abort(); }, timeoutMs);
   fetch(API_URL,{
     method:'POST',
     redirect:'follow',
@@ -2056,7 +2057,7 @@ function callServer(action,payload,onOk,onErr){
     })
     .catch(function(e){
       clearTimeout(timer);
-      var msg = (e && e.name==='AbortError') ? 'เชื่อมต่อ Server เกิน 30 วินาที กรุณาลองใหม่' : ((e&&e.message)||String(e));
+      var msg = (e && e.name==='AbortError') ? ('เชื่อมต่อ Server เกิน '+Math.round(timeoutMs/1000)+' วินาที กรุณาลองใหม่') : ((e&&e.message)||String(e));
       onErr(msg);
     });
 }
@@ -6823,25 +6824,27 @@ html body.bal-ui.camera-returning *{transition-duration:.01ms!important;animatio
 </style>
 
 
-<script id="staff-loader-stability-v62">
+<script id="staff-loader-stability-v65">
 (function(){
   'use strict';
-  var CACHE_KEY='wwt_staff_cache_v62';
-  var CACHE_MAX_AGE=7*24*60*60*1000;
-  var busy=false;
+  var CACHE_KEY='wwt_staff_cache_v65';
+  var CACHE_MAX_AGE=30*24*60*60*1000;
+  var inFlight=false;
+  var waiters=[];
+  var firstWarmDone=false;
 
   function readCache(){
     try{
       var raw=localStorage.getItem(CACHE_KEY); if(!raw)return null;
       var d=JSON.parse(raw); if(!d||!Array.isArray(d.names))return null;
       if(Date.now()-Number(d.ts||0)>CACHE_MAX_AGE)return null;
-      return d.names;
+      return d;
     }catch(e){return null;}
   }
   function writeCache(names){
     try{localStorage.setItem(CACHE_KEY,JSON.stringify({ts:Date.now(),names:names||[]}));}catch(e){}
   }
-  function setCachedNames(names,label){
+  function applyNames(names,label){
     if(!window.NS||!Array.isArray(names))return false;
     NS.names=names; NS.loaded=true;
     try{nsSetReloadStatus(label||((names.length||0)+' คน'));}catch(e){}
@@ -6849,77 +6852,88 @@ html body.bal-ui.camera-returning *{transition-duration:.01ms!important;animatio
     try{nsRenderList();}catch(e){}
     return true;
   }
+  function finishWaiters(){
+    var q=waiters.splice(0,waiters.length);
+    q.forEach(function(fn){try{if(fn)fn();}catch(e){}});
+  }
+  function requestStaff(opts){
+    opts=opts||{};
+    if(opts.onDone)waiters.push(opts.onDone);
+    if(inFlight)return;
+    inFlight=true;
+    var attempts=0;
+
+    function doneSuccess(res){
+      inFlight=false;
+      if(res&&res.success&&Array.isArray(res.names)){
+        writeCache(res.names);
+        applyNames(res.names,res.names.length+' คน');
+      }
+      finishWaiters();
+    }
+    function fail(err){
+      attempts++;
+      if(attempts<2 && navigator.onLine!==false){
+        setTimeout(function(){
+          callServer('getStaffNames',{forceRefresh:false},doneSuccess,fail);
+        },500);
+        return;
+      }
+      inFlight=false;
+      finishWaiters();
+    }
+    callServer('getStaffNames',{forceRefresh:!!opts.forceRefresh},doneSuccess,fail);
+  }
 
   window.nsLoadFromServer=function(onDone){
     var btn=document.getElementById('nsReloadBtn'), list=document.getElementById('nsList');
-    if(busy){ if(onDone)setTimeout(onDone,0); return; }
-    busy=true;
-    if(btn)btn.classList.add('spinning');
-    try{nsSetReloadStatus('กำลังโหลด...');}catch(e){}
-
     var cached=readCache();
-    if(cached&&cached.length){
-      setCachedNames(cached,cached.length+' คน • กำลังอัปเดต');
-    }else if(list){
-      list.innerHTML='<div class="ns-loading"><div class="ns-loading-spin"></div>กำลังดึงรายชื่อ...</div>';
+
+    // แสดง cache ทันที ห้ามให้ผู้ใช้รอ Server ก่อนเห็นรายชื่อ
+    if(cached&&cached.names&&cached.names.length){
+      applyNames(cached.names,cached.names.length+' คน');
+    }else if(list && (!window.NS || !NS.loaded)){
+      list.innerHTML='<div class="ns-loading"><div class="ns-loading-spin"></div>กำลังดึงรายชื่อครั้งแรก...</div>';
     }
 
-    var finished=false;
+    if(btn)btn.classList.add('spinning');
+    var uiDone=false;
     var uiTimer=setTimeout(function(){
-      if(finished)return;
-      finished=true; busy=false;
+      uiDone=true;
       if(btn)btn.classList.remove('spinning');
-      if(cached&&cached.length){
-        setCachedNames(cached,cached.length+' คน • ใช้ข้อมูลล่าสุดในเครื่อง');
-        try{showToast('เครือข่ายตอบช้า ใช้รายชื่อที่โหลดไว้ก่อน','error',3500);}catch(e){}
-      }else{
-        try{nsSetReloadStatus('Server ตอบช้า — กดลองใหม่');}catch(e){}
-        if(list) list.innerHTML='<div class="ns-empty-state"><p>ดึงรายชื่อไม่สำเร็จ</p><small>แตะปุ่มรีเฟรชเพื่อลองใหม่</small></div>';
-        try{showToast('⚠️ Server ตอบช้าเกิน 12 วินาที','error',4500);}catch(e){}
+      if(cached&&cached.names&&cached.names.length){
+        applyNames(cached.names,cached.names.length+' คน • ใช้ข้อมูลในเครื่อง');
+      }else if(list && (!window.NS || !NS.loaded)){
+        try{nsSetReloadStatus('Server ช้า — กำลังลองใหม่เบื้องหลัง');}catch(e){}
+        list.innerHTML='<div class="ns-empty-state"><p>Server ตอบช้า</p><small>ระบบกำลังลองใหม่อัตโนมัติ ไม่ต้องกดซ้ำ</small></div>';
       }
-      if(onDone)onDone();
-    },12000);
+      if(onDone){try{onDone();}catch(e){}}
+    },4500);
 
-    try{
-      callServer('getStaffNames',null,function(res){
-        if(finished)return;
-        finished=true; busy=false; clearTimeout(uiTimer);
-        if(btn)btn.classList.remove('spinning');
-        if(res&&res.success&&Array.isArray(res.names)){
-          NS.names=res.names; NS.loaded=true; writeCache(NS.names);
-          try{nsSetReloadStatus(NS.names.length+' คน จาก Spreadsheet');nsUpdateBadge();nsRenderList();}catch(e){}
-        }else if(cached&&cached.length){
-          setCachedNames(cached,cached.length+' คน • ใช้ข้อมูลล่าสุดในเครื่อง');
-          try{showToast('⚠️ Server ส่งข้อมูลไม่สมบูรณ์ ใช้รายชื่อเดิมก่อน','error',4000);}catch(e){}
+    requestStaff({
+      forceRefresh:false,
+      onDone:function(){
+        if(!uiDone){
+          clearTimeout(uiTimer);
+          if(btn)btn.classList.remove('spinning');
+          if(onDone){try{onDone();}catch(e){}}
         }else{
-          try{nsSetReloadStatus('โหลดไม่สำเร็จ');nsRenderList();showToast('⚠️ โหลดรายชื่อไม่สำเร็จ','error',5000);}catch(e){}
+          // response ที่มาช้าก็ยังอัปเดตรายชื่อทันที ไม่ทิ้งผลลัพธ์
+          if(btn)btn.classList.remove('spinning');
         }
-        if(onDone)onDone();
-      },function(err){
-        if(finished)return;
-        finished=true; busy=false; clearTimeout(uiTimer);
-        if(btn)btn.classList.remove('spinning');
-        if(cached&&cached.length){
-          setCachedNames(cached,cached.length+' คน • ใช้ข้อมูลล่าสุดในเครื่อง');
-          try{showToast('⚠️ ติดต่อ Server ไม่ได้ ใช้รายชื่อเดิมก่อน','error',4000);}catch(e){}
-        }else{
-          try{nsSetReloadStatus('เกิดข้อผิดพลาด');}catch(e){}
-          if(list) list.innerHTML='<div class="ns-empty-state"><p>ดึงรายชื่อไม่สำเร็จ</p><small>แตะปุ่มรีเฟรชเพื่อลองใหม่</small></div>';
-          try{showToast('⚠️ โหลดรายชื่อไม่สำเร็จ: '+err,'error',5000);}catch(e){}
-        }
-        if(onDone)onDone();
-      });
-    }catch(err){
-      if(!finished){
-        finished=true; busy=false; clearTimeout(uiTimer);
-        if(btn)btn.classList.remove('spinning');
-        if(cached&&cached.length)setCachedNames(cached,cached.length+' คน • ใช้ข้อมูลล่าสุดในเครื่อง');
-        else if(list)list.innerHTML='<div class="ns-empty-state"><p>ดึงรายชื่อไม่สำเร็จ</p><small>แตะปุ่มรีเฟรชเพื่อลองใหม่</small></div>';
-        try{showToast('⚠️ '+((err&&err.message)||String(err)),'error',5000);}catch(e){}
-        if(onDone)onDone();
       }
-    }
+    });
   };
+
+  // Warm cache หลังหน้าเปิด ไม่รอจนผู้ใช้แตะ dropdown
+  function warm(){
+    if(firstWarmDone)return; firstWarmDone=true;
+    var cached=readCache();
+    if(cached&&cached.names){ applyNames(cached.names,cached.names.length+' คน'); }
+    setTimeout(function(){ requestStaff({forceRefresh:false}); },350);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',warm,{once:true});
+  else warm();
 })();
 </script>
 
