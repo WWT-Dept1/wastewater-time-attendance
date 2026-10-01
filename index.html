@@ -6,8 +6,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="บันทึกเวลาเข้า–เลิกงาน"/>
 <meta name="format-detection" content="telephone=no"/>
-<title>บันทึกเวลาเข้าปฏิบัติงาน · Failure Audit v4.4</title>
+<title>บันทึกเวลาเข้า–เลิกงาน</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/><script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
@@ -6618,6 +6619,75 @@ html body.bal-ui select{font-family:'Prompt',sans-serif!important;}
 html body.bal-ui p,
 html body.bal-ui .notice,
 html body.bal-ui .gps-detail{line-height:1.55!important;}
+</style>
+
+
+
+<style id="v57-title-name-spacing-fix">
+/* v5.7 — visual-only fixes: cleaner browser title + safer name field spacing */
+html body.bal-ui .field-group:has(#nameSelector){
+  padding:18px 18px 20px !important;
+  border-radius:28px !important;
+  background:rgba(251,252,253,.82) !important;
+  border:1px solid rgba(220,229,236,.78) !important;
+  box-shadow:0 9px 24px rgba(75,92,109,.045) !important;
+  overflow:visible !important;
+}
+html body.bal-ui .field-group:has(#nameSelector) > label{
+  width:100% !important;
+  min-width:0 !important;
+  padding:0 2px !important;
+  margin:0 0 12px !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:8px !important;
+  font-size:15px !important;
+  line-height:1.45 !important;
+  font-weight:600 !important;
+  color:#526274 !important;
+  box-sizing:border-box !important;
+}
+html body.bal-ui .field-group:has(#nameSelector) .req{
+  margin-right:2px !important;
+  flex:0 0 auto !important;
+}
+html body.bal-ui .field-group:has(#nameSelector) .ns-count-badge{
+  margin-left:auto !important;
+  flex:0 0 auto !important;
+  padding:5px 11px !important;
+  border-radius:999px !important;
+  background:#eef2f5 !important;
+  color:#8090a0 !important;
+  font-size:12px !important;
+  line-height:1.2 !important;
+  font-weight:500 !important;
+}
+html body.bal-ui .field-group:has(#nameSelector) .name-selector-wrap{
+  width:100% !important;
+  min-width:0 !important;
+}
+html body.bal-ui .field-group:has(#nameSelector) .ns-trigger{
+  width:100% !important;
+  min-width:0 !important;
+  padding:15px 16px !important;
+  border-radius:22px !important;
+  box-sizing:border-box !important;
+}
+@media(max-width:430px){
+  html body.bal-ui .field-group:has(#nameSelector){
+    padding:16px 14px 18px !important;
+    border-radius:26px !important;
+  }
+  html body.bal-ui .field-group:has(#nameSelector) > label{
+    padding:0 1px !important;
+    font-size:14px !important;
+    gap:6px !important;
+  }
+  html body.bal-ui .field-group:has(#nameSelector) .ns-count-badge{
+    padding:4px 9px !important;
+    font-size:11px !important;
+  }
+}
 </style>
 
 </body>
