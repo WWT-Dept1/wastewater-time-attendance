@@ -5971,8 +5971,8 @@ window.showConfirm=function(data,onYes){if(typeof oldShow==='function'){oldShow(
 </script>
 
 
-<style id="gps-nonblocking-v6">
-/* GPS is informative, not a hard UI lock */
+<style id="gps-auto-retry-v6-6">
+/* ให้ปุ่มกดได้แม้ GPS กำลังค้นหา เพื่อให้การกดบันทึกเป็นตัวสั่ง Auto Retry */
 body.bal-ui #submitBtn.is-disabled{
   opacity:1 !important;
   pointer-events:auto !important;
@@ -5982,8 +5982,10 @@ body.bal-ui #submitBtn.gps-pending{
   filter:saturate(.92) !important;
 }
 </style>
-<script id="gps-nonblocking-script-v6">
+<script id="gps-auto-retry-script-v6-6">
 (function(){
+  var gpsSubmitRetryBusy=false;
+
   function unlockSubmit(){
     var btn=document.getElementById('submitBtn');
     if(!btn) return;
@@ -5991,8 +5993,8 @@ body.bal-ui #submitBtn.gps-pending{
     btn.classList.toggle('gps-pending', !(typeof gpsOk!=='undefined' && gpsOk));
   }
 
-  // Replace GPS-driven button lock with non-blocking status only.
-  window.updateBtn = function(){
+  // GPS ไม่พร้อม = ยังให้แตะปุ่มได้ แต่ไม่ได้ปล่อยผ่านการตรวจ GPS
+  window.updateBtn=function(){
     if(typeof isLoading!=='undefined' && isLoading) return;
     var btn=document.getElementById('submitBtn');
     if(!btn) return;
@@ -6000,47 +6002,117 @@ body.bal-ui #submitBtn.gps-pending{
     btn.classList.toggle('gps-pending', !(typeof gpsOk!=='undefined' && gpsOk));
   };
 
-  // Keep the original validations for name/photo, but do not hard-stop on GPS.
-  var originalHandleSubmit = window.handleSubmit;
-  if(typeof originalHandleSubmit === 'function'){
-    window.handleSubmit = function(){
-      var oldGpsOk = (typeof gpsOk!=='undefined') ? gpsOk : false;
-      var oldLat = (typeof currentLat!=='undefined') ? currentLat : null;
-      var oldLng = (typeof currentLng!=='undefined') ? currentLng : null;
-      var oldAcc = (typeof currentAcc!=='undefined') ? currentAcc : null;
+  function gpsPermissionDenied_(){
+    if(!navigator.permissions || !navigator.permissions.query) return Promise.resolve(false);
+    return navigator.permissions.query({name:'geolocation'}).then(function(st){
+      return st && st.state==='denied';
+    }).catch(function(){ return false; });
+  }
 
-      // If GPS is temporarily unavailable, allow the normal submit flow to continue
-      // by supplying a neutral fallback location state. The backend/audit can still
-      // see that GPS was not actually ready via gpsReady:false in audit payloads.
-      if(!oldGpsOk){
-        try{
-          if(typeof auditIfIdentified_==='function') auditIfIdentified_('GPS_NOT_READY_NONBLOCK','บันทึกโดย GPS ไม่พร้อม');
-        }catch(e){}
-        try{
-          if(typeof showToast==='function') showToast('⚠️ GPS ไม่พร้อม — ระบบจะบันทึกเวลาโดยระบุสถานะ GPS','',2600);
-        }catch(e){}
+  function requestFreshGpsOnce_(timeoutMs){
+    return new Promise(function(resolve){
+      if(!navigator.geolocation){ resolve(false); return; }
+      var done=false;
+      function finish(v){ if(done) return; done=true; resolve(!!v); }
+      try{
+        navigator.geolocation.getCurrentPosition(function(pos){
+          try{
+            // ใช้ตัวประมวลผล GPS เดิมของระบบ: ตรวจ accuracy / ระยะ / mock ครบเหมือนเดิม
+            if(typeof onGpsSuccess==='function') onGpsSuccess(pos);
+          }catch(e){}
+          finish(typeof gpsOk!=='undefined' && gpsOk===true);
+        },function(err){
+          try{ if(typeof onGpsError==='function') onGpsError(err); }catch(e){}
+          finish(false);
+        },{enableHighAccuracy:true,maximumAge:0,timeout:timeoutMs});
+      }catch(e){ finish(false); }
+    });
+  }
 
-        // Temporarily mark GPS as passable only for the front-end flow.
-        // Use target coordinates so distance checks don't crash; restore immediately
-        // after opening the confirmation modal / starting save.
-        try{
-          var t = (typeof getWorkTarget==='function') ? getWorkTarget() : null;
-          if(t){ currentLat=t.lat; currentLng=t.lng; }
-          if(!isFinite(Number(currentAcc)) || Number(currentAcc)<=0) currentAcc=999;
-          gpsOk=true;
-        }catch(e){}
+  function acquireGpsForSubmit_(){
+    if(typeof gpsOk!=='undefined' && gpsOk && typeof currentLat!=='undefined' && currentLat!==null)
+      return Promise.resolve(true);
+
+    return gpsPermissionDenied_().then(function(denied){
+      if(denied){
+        try{ if(typeof showGpsPermissionHelp==='function') showGpsPermissionHelp(); }catch(e){}
+        return false;
       }
 
       try{
-        return originalHandleSubmit.apply(this,arguments);
-      } finally {
-        // Restore real GPS state shortly after synchronous validation finishes.
-        if(!oldGpsOk){
-          setTimeout(function(){
-            try{ gpsOk=oldGpsOk; currentLat=oldLat; currentLng=oldLng; currentAcc=oldAcc; unlockSubmit(); }catch(e){}
-          },50);
-        }
+        if(typeof setGpsUI==='function') setGpsUI('checking','กำลังตรวจ GPS ใหม่ก่อนบันทึก...','ครั้งที่ 1/2');
+        if(typeof showToast==='function') showToast('📍 กำลังค้นหาตำแหน่งใหม่ก่อนบันทึก...','',3500);
+      }catch(e){}
+      try{ if(typeof startGps==='function') startGps(); }catch(e){}
+
+      return requestFreshGpsOnce_(12000).then(function(ok){
+        if(ok) return true;
+        if(typeof isMockDetected!=='undefined' && isMockDetected) return false;
+
+        try{
+          if(typeof setGpsUI==='function') setGpsUI('checking','กำลังลองรับ GPS อีกครั้ง...','ครั้งที่ 2/2');
+          if(typeof showToast==='function') showToast('🔄 GPS ยังไม่พร้อม กำลังลองอีกครั้งอัตโนมัติ...','',3500);
+          if(typeof startGps==='function') startGps();
+        }catch(e){}
+
+        return new Promise(function(r){setTimeout(r,900);}).then(function(){
+          return requestFreshGpsOnce_(12000);
+        });
+      });
+    });
+  }
+
+  var originalHandleSubmit=window.handleSubmit;
+  if(typeof originalHandleSubmit==='function'){
+    window.handleSubmit=function(){
+      var self=this,args=arguments;
+      if(gpsSubmitRetryBusy) return;
+
+      // ถ้า GPS พร้อมอยู่แล้ว ใช้ flow เดิมทันที
+      if(typeof gpsOk!=='undefined' && gpsOk && typeof currentLat!=='undefined' && currentLat!==null){
+        return originalHandleSubmit.apply(self,args);
       }
+
+      gpsSubmitRetryBusy=true;
+      var btn=document.getElementById('submitBtn');
+      var oldText=btn?btn.innerHTML:'';
+      if(btn){
+        btn.classList.add('is-loading');
+        btn.innerHTML='<span class="btn-icon">⌖</span> กำลังตรวจ GPS...';
+      }
+
+      return acquireGpsForSubmit_().then(function(ok){
+        gpsSubmitRetryBusy=false;
+        if(btn){ btn.classList.remove('is-loading'); btn.innerHTML=oldText; }
+        unlockSubmit();
+
+        if(ok){
+          try{
+            if(typeof showToast==='function') showToast('✅ GPS พร้อมแล้ว กำลังบันทึก...','success',1800);
+          }catch(e){}
+          return originalHandleSubmit.apply(self,args);
+        }
+
+        try{
+          if(typeof auditIfIdentified_==='function')
+            auditIfIdentified_('GPS_AUTO_RETRY_FAILED','GPS ไม่พร้อมหลังลองอัตโนมัติ 2 ครั้ง');
+        }catch(e){}
+
+        // ไม่สร้างพิกัดปลอมและไม่ปล่อยผ่าน ถ้าไม่มี GPS จริง
+        if(!(typeof isMockDetected!=='undefined' && isMockDetected)){
+          try{
+            if(typeof showToast==='function')
+              showToast('❌ ยังรับ GPS ไม่ได้ กรุณาเปิดตำแหน่งและออกไปจุดที่รับสัญญาณได้ แล้วกดบันทึกอีกครั้ง','error',7000);
+          }catch(e){}
+        }
+        return false;
+      }).catch(function(){
+        gpsSubmitRetryBusy=false;
+        if(btn){ btn.classList.remove('is-loading'); btn.innerHTML=oldText; }
+        unlockSubmit();
+        try{ if(typeof showToast==='function') showToast('❌ ตรวจ GPS ไม่สำเร็จ กรุณาลองอีกครั้ง','error',6000); }catch(e){}
+        return false;
+      });
     };
   }
 
@@ -6048,7 +6120,7 @@ body.bal-ui #submitBtn.gps-pending{
     unlockSubmit();
     var btn=document.getElementById('submitBtn');
     if(btn){
-      // Rebind to the patched handler so the old listener cannot keep blocking GPS.
+      // listener เดิมจับ handleSubmit ตัวเก่าไว้ จึง clone แล้วผูก handler ใหม่
       var clone=btn.cloneNode(true);
       btn.parentNode.replaceChild(clone,btn);
       clone.addEventListener('click',function(e){
