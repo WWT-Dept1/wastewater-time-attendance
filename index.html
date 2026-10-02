@@ -17,7 +17,7 @@
   }catch(e){}
 })();
 </script>
-<meta name="app-version" content="ExternalUI v6.3 ANDROID-CAMERA-PREVIEW">
+<meta name="app-version" content="ExternalUI v6.7 CAMERA-CACHE-STABLE">
 <meta charset="UTF-8"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
@@ -27,7 +27,28 @@
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="format-detection" content="telephone=no"/>
-<title>บันทึกเวลาเข้าปฏิบัติงาน · Failure Audit v4.4</title>
+<title>บันทึกเวลาเข้า–เลิกงาน</title>
+<script id="release-cache-refresh-v67">
+(function(){
+  'use strict';
+  var VERSION='wwt-ui-v6.7';
+  try{
+    if(localStorage.getItem('wwt_release_version')!==VERSION){
+      localStorage.setItem('wwt_release_version',VERSION);
+      if('caches' in window){
+        caches.keys().then(function(keys){
+          return Promise.all(keys.map(function(k){return caches.delete(k);}));
+        }).catch(function(){});
+      }
+      if('serviceWorker' in navigator){
+        navigator.serviceWorker.getRegistrations().then(function(regs){
+          regs.forEach(function(r){try{r.update();}catch(e){}});
+        }).catch(function(){});
+      }
+    }
+  }catch(e){}
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/><script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
@@ -2356,55 +2377,127 @@ if(navigator.permissions&&navigator.permissions.query){
 // ── Image Compress ────────────────────────────────────────────
 function compressImage(file){return new Promise(function(resolve,reject){
   var MAX_W=IMG_MAX_W||1280, MAX_H=IMG_MAX_H||1280;
+  var settled=false;
+  function fail(msg){if(settled)return;settled=true;reject(new Error(msg));}
+  function done(v){if(settled)return;settled=true;resolve(v);}
+  if(!file){fail('ไม่พบไฟล์ภาพ กรุณาถ่ายใหม่');return;}
+  if(!file.size){fail('ไฟล์ภาพว่าง กรุณาถ่ายใหม่');return;}
+
+  var fileName=String(file.name||'').toLowerCase();
+  var fileType=String(file.type||'').toLowerCase();
+  if(/heic|heif/.test(fileType)||/\.(heic|heif)$/.test(fileName)){
+    fail('โทรศัพท์ส่งภาพเป็น HEIC/HEIF ซึ่งเบราว์เซอร์นี้เปิดไม่ได้ กรุณาตั้งกล้องเป็น JPEG/รูปแบบเข้ากันได้แล้วถ่ายใหม่');return;
+  }
+
   function blobToResult(blob,w,h,q){
     var fr=new FileReader();
-    fr.onerror=function(){reject(new Error('อ่านรูปที่บีบอัดไม่ได้'));};
+    fr.onerror=function(){fail('อ่านรูปที่บีบอัดไม่ได้');};
     fr.onload=function(){
       var du=fr.result||'';
-      if(!du||du.length<50){reject(new Error('สร้างไฟล์ภาพไม่สำเร็จ'));return;}
-      resolve({base64:du.split(',')[1],mime:'image/jpeg',widthOut:w,heightOut:h,sizeKB:Math.round(blob.size/1024),quality:q,dataURL:du});
+      if(!du||du.length<50){fail('สร้างไฟล์ภาพไม่สำเร็จ');return;}
+      done({base64:du.split(',')[1],mime:'image/jpeg',widthOut:w,heightOut:h,sizeKB:Math.round(blob.size/1024),quality:q,dataURL:du});
     };
-    fr.readAsDataURL(blob);
+    try{fr.readAsDataURL(blob);}catch(e){fail('อ่านรูปที่บีบอัดไม่ได้');}
   }
   function encodeCanvas(cv,w,h,q){
     if(!cv.toBlob){
       try{
         var du=cv.toDataURL('image/jpeg',q);
         var kb=Math.round((du.length*3)/(4*1024));
-        resolve({base64:du.split(',')[1],mime:'image/jpeg',widthOut:w,heightOut:h,sizeKB:kb,quality:q,dataURL:du});
-      }catch(e){reject(new Error('บีบอัดรูปไม่สำเร็จ'));}
+        done({base64:du.split(',')[1],mime:'image/jpeg',widthOut:w,heightOut:h,sizeKB:kb,quality:q,dataURL:du});
+      }catch(e){fail('บีบอัดรูปไม่สำเร็จ');}
       return;
     }
-    cv.toBlob(function(blob){
-      if(!blob){reject(new Error('บีบอัดรูปไม่สำเร็จ'));return;}
-      if(blob.size>IMG_MAX_KB*1024 && q>IMG_MIN_Q){
-        var q2=Math.max(IMG_MIN_Q,q-0.16);
-        cv.toBlob(function(blob2){blobToResult(blob2||blob,w,h,q2);},'image/jpeg',q2);
-      }else blobToResult(blob,w,h,q);
-    },'image/jpeg',q);
+    try{
+      cv.toBlob(function(blob){
+        if(!blob){fail('บีบอัดรูปไม่สำเร็จ');return;}
+        if(blob.size>IMG_MAX_KB*1024 && q>IMG_MIN_Q){
+          var q2=Math.max(IMG_MIN_Q,q-0.16);
+          cv.toBlob(function(blob2){blobToResult(blob2||blob,w,h,q2);},'image/jpeg',q2);
+        }else blobToResult(blob,w,h,q);
+      },'image/jpeg',q);
+    }catch(e){fail('บีบอัดรูปไม่สำเร็จ');}
   }
   function drawSource(source,w,h){
+    w=Number(w)||0;h=Number(h)||0;
+    if(w<1||h<1){try{if(source&&source.close)source.close();}catch(e){} fail('อ่านขนาดรูปไม่ได้ กรุณาถ่ายใหม่');return;}
     var ratio=Math.min(MAX_W/w,MAX_H/h,1), ow=Math.max(1,Math.round(w*ratio)), oh=Math.max(1,Math.round(h*ratio));
     var cv=document.createElement('canvas');cv.width=ow;cv.height=oh;
     var ctx=cv.getContext('2d',{alpha:false});
-    if(!ctx){reject(new Error('อุปกรณ์ไม่รองรับการย่อรูป'));return;}
+    if(!ctx){fail('อุปกรณ์ไม่รองรับการย่อรูป');return;}
     ctx.fillStyle='#fff';ctx.fillRect(0,0,ow,oh);
-    try{ctx.drawImage(source,0,0,ow,oh);}catch(e){reject(new Error('ประมวลผลรูปไม่สำเร็จ'));return;}
-    try{ if(source && typeof source.close==='function') source.close(); }catch(e){}
+    try{ctx.drawImage(source,0,0,ow,oh);}catch(e){try{if(source&&source.close)source.close();}catch(ee){} fail('ประมวลผลรูปไม่สำเร็จ');return;}
+    try{if(source&&typeof source.close==='function')source.close();}catch(e){}
     encodeCanvas(cv,ow,oh,IMG_Q);
   }
-  if(window.createImageBitmap){
-    createImageBitmap(file).then(function(bm){drawSource(bm,bm.width,bm.height);}).catch(function(){fallback();});
-  }else fallback();
-  function fallback(){
+
+  function imageFromDataURL(blob,next){
+    var fr=new FileReader(), finished=false;
+    fr.onerror=function(){if(!finished){finished=true;next();}};
+    fr.onload=function(){
+      if(finished)return;
+      var data=fr.result;
+      if(!data){finished=true;next();return;}
+      var img=new Image();
+      var timer=setTimeout(function(){if(!finished){finished=true;next();}},10000);
+      img.onload=function(){if(finished)return;finished=true;clearTimeout(timer);drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
+      img.onerror=function(){if(finished)return;finished=true;clearTimeout(timer);next();};
+      img.src=data;
+    };
+    try{fr.readAsDataURL(blob);}catch(e){next();}
+  }
+
+  function imageFromObjectURL(blob,next){
     var url='';
-    try{url=URL.createObjectURL(file);}catch(e){url='';}
-    if(!url){reject(new Error('เปิดรูปไม่ได้'));return;}
-    var img=new Image();
-    img.onload=function(){try{URL.revokeObjectURL(url);}catch(e){} drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
-    img.onerror=function(){try{URL.revokeObjectURL(url);}catch(e){} reject(new Error('เปิดรูปไม่ได้'));};
+    try{url=URL.createObjectURL(blob);}catch(e){}
+    if(!url){next();return;}
+    var img=new Image(),finished=false;
+    var timer=setTimeout(function(){if(!finished){finished=true;try{URL.revokeObjectURL(url);}catch(e){}next();}},10000);
+    img.onload=function(){if(finished)return;finished=true;clearTimeout(timer);try{URL.revokeObjectURL(url);}catch(e){}drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
+    img.onerror=function(){if(finished)return;finished=true;clearTimeout(timer);try{URL.revokeObjectURL(url);}catch(e){}next();};
     img.src=url;
   }
+
+  function decodeBlob(blob){
+    var stage=0;
+    function next(){
+      if(settled)return;
+      stage++;
+      if(stage===1 && window.createImageBitmap){
+        try{
+          createImageBitmap(blob).then(function(bm){drawSource(bm,bm.width,bm.height);}).catch(next);
+        }catch(e){next();}
+      }else if(stage<=2){
+        imageFromDataURL(blob,next);
+      }else if(stage<=3){
+        imageFromObjectURL(blob,next);
+      }else{
+        fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');
+      }
+    }
+    next();
+  }
+
+  // Android บางรุ่นคืน File จากกล้องเร็วกว่าที่ WebView จะอ่าน URI ได้เสถียร
+  // จึงคัดลอกไฟล์เข้า memory ก่อน และ retry การอ่านหนึ่งครั้ง
+  function cloneAndDecode(attempt){
+    var reader=new FileReader();
+    reader.onload=function(){
+      try{
+        var buf=reader.result;
+        var blob=new Blob([buf],{type:file.type||'image/jpeg'});
+        decodeBlob(blob);
+      }catch(e){decodeBlob(file);}
+    };
+    reader.onerror=function(){
+      if(attempt<1){setTimeout(function(){cloneAndDecode(attempt+1);},350);}
+      else decodeBlob(file);
+    };
+    try{reader.readAsArrayBuffer(file);}catch(e){
+      if(attempt<1)setTimeout(function(){cloneAndDecode(attempt+1);},350);else decodeBlob(file);
+    }
+  }
+  setTimeout(function(){cloneAndDecode(0);},180);
 });}
 
 function readExifDate(file){return new Promise(function(resolve){if(!file||file.type!=='image/jpeg')return resolve({hasExif:false,shootTime:null});var reader=new FileReader();reader.onload=function(e){try{var buf=e.target.result,view=new DataView(buf);if(view.getUint16(0)!==0xFFD8)return resolve({hasExif:false,shootTime:null});var offset=2,len=buf.byteLength;while(offset<len-2){var marker=view.getUint16(offset);if(marker===0xFFE1){var segLen=view.getUint16(offset+2),hdr='';for(var i=0;i<4;i++)hdr+=String.fromCharCode(view.getUint8(offset+4+i));if(hdr!=='Exif'){offset+=2+segLen;continue;}var tOff=offset+10,little=view.getUint16(tOff)===0x4949,iOff=tOff+view.getUint32(tOff+4,little),nE=view.getUint16(iOff,little),exifOff=null;for(var j=0;j<nE;j++){var eO=iOff+2+j*12;if(eO+12>len)break;if(view.getUint16(eO,little)===0x8769)exifOff=tOff+view.getUint32(eO+8,little);}if(exifOff){try{var en=view.getUint16(exifOff,little);for(var j2=0;j2<en;j2++){var eO2=exifOff+2+j2*12;if(eO2+12>len)break;if(view.getUint16(eO2,little)===0x9003){var dvO=view.getUint32(eO2+8,little),ds='';for(var k=0;k<19;k++)ds+=String.fromCharCode(view.getUint8(tOff+dvO+k));var pts=ds.split(' ');if(pts.length===2){var dp=pts[0].split(':'),tp=pts[1].split(':');var dt=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]),parseInt(tp[0]),parseInt(tp[1]),parseInt(tp[2]));return resolve({hasExif:true,shootTime:dt.getTime()});}return resolve({hasExif:true,shootTime:null});}}}catch(ee){}}return resolve({hasExif:true,shootTime:null});}if((marker&0xFF00)!==0xFF00)break;offset+=2+view.getUint16(offset+2);}resolve({hasExif:false,shootTime:null});}catch(err){resolve({hasExif:false,shootTime:null});}};reader.onerror=function(){resolve({hasExif:false,shootTime:null});};var slice=file.slice?file.slice(0,131072):file;reader.readAsArrayBuffer(slice);});}
