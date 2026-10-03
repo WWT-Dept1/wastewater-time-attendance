@@ -17,7 +17,7 @@
   }catch(e){}
 })();
 </script>
-<meta name="app-version" content="ExternalUI v6.7 CAMERA-CACHE-STABLE">
+<meta name="app-version" content="ExternalUI v6.8 IOS-HEIC-CAMERA-FIX">
 <meta charset="UTF-8"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
@@ -2385,9 +2385,9 @@ function compressImage(file){return new Promise(function(resolve,reject){
 
   var fileName=String(file.name||'').toLowerCase();
   var fileType=String(file.type||'').toLowerCase();
-  if(/heic|heif/.test(fileType)||/\.(heic|heif)$/.test(fileName)){
-    fail('โทรศัพท์ส่งภาพเป็น HEIC/HEIF ซึ่งเบราว์เซอร์นี้เปิดไม่ได้ กรุณาตั้งกล้องเป็น JPEG/รูปแบบเข้ากันได้แล้วถ่ายใหม่');return;
-  }
+  var isHeic=/heic|heif/.test(fileType)||/\.(heic|heif)$/.test(fileName);
+  // iPhone/iOS สามารถส่งภาพจากกล้องเป็น HEIC/HEIF ได้ตามปกติ
+  // ห้ามปฏิเสธไฟล์ทันที ให้ WebKit/เบราว์เซอร์ลอง decode ก่อน แล้วแปลงเป็น JPEG ผ่าน Canvas
 
   function blobToResult(blob,w,h,q){
     var fr=new FileReader();
@@ -2472,14 +2472,14 @@ function compressImage(file){return new Promise(function(resolve,reject){
       }else if(stage<=3){
         imageFromObjectURL(blob,next);
       }else{
-        fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');
+        fail(isHeic?'อุปกรณ์นี้อ่านภาพ HEIC/HEIF ไม่สำเร็จ กรุณาถ่ายใหม่อีกครั้ง':'เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');
       }
     }
     next();
   }
 
-  // Android บางรุ่นคืน File จากกล้องเร็วกว่าที่ WebView จะอ่าน URI ได้เสถียร
-  // จึงคัดลอกไฟล์เข้า memory ก่อน และ retry การอ่านหนึ่งครั้ง
+  // บางเบราว์เซอร์มือถือคืน File จากกล้องเร็วกว่าที่หน้าเว็บจะอ่านได้เสถียร
+  // จึงคัดลอกไฟล์เข้า memory ก่อน และ retry การอ่านหนึ่งครั้ง (รองรับทั้ง iOS/Android)
   function cloneAndDecode(attempt){
     var reader=new FileReader();
     reader.onload=function(){
