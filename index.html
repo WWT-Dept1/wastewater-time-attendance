@@ -17,7 +17,7 @@
   }catch(e){}
 })();
 </script>
-<meta name="app-version" content="ExternalUI v6.8 IOS-HEIC-CAMERA-FIX">
+<meta name="app-version" content="ExternalUI v6.9 HEIC-DECODER-STABLE">
 <meta charset="UTF-8"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
@@ -31,7 +31,7 @@
 <script id="release-cache-refresh-v67">
 (function(){
   'use strict';
-  var VERSION='wwt-ui-v6.7';
+  var VERSION='wwt-ui-v6.9';
   try{
     if(localStorage.getItem('wwt_release_version')!==VERSION){
       localStorage.setItem('wwt_release_version',VERSION);
@@ -2386,8 +2386,6 @@ function compressImage(file){return new Promise(function(resolve,reject){
   var fileName=String(file.name||'').toLowerCase();
   var fileType=String(file.type||'').toLowerCase();
   var isHeic=/heic|heif/.test(fileType)||/\.(heic|heif)$/.test(fileName);
-  // iPhone/iOS สามารถส่งภาพจากกล้องเป็น HEIC/HEIF ได้ตามปกติ
-  // ห้ามปฏิเสธไฟล์ทันที ให้ WebKit/เบราว์เซอร์ลอง decode ก่อน แล้วแปลงเป็น JPEG ผ่าน Canvas
 
   function blobToResult(blob,w,h,q){
     var fr=new FileReader();
@@ -2399,6 +2397,7 @@ function compressImage(file){return new Promise(function(resolve,reject){
     };
     try{fr.readAsDataURL(blob);}catch(e){fail('อ่านรูปที่บีบอัดไม่ได้');}
   }
+
   function encodeCanvas(cv,w,h,q){
     if(!cv.toBlob){
       try{
@@ -2418,6 +2417,7 @@ function compressImage(file){return new Promise(function(resolve,reject){
       },'image/jpeg',q);
     }catch(e){fail('บีบอัดรูปไม่สำเร็จ');}
   }
+
   function drawSource(source,w,h){
     w=Number(w)||0;h=Number(h)||0;
     if(w<1||h<1){try{if(source&&source.close)source.close();}catch(e){} fail('อ่านขนาดรูปไม่ได้ กรุณาถ่ายใหม่');return;}
@@ -2431,34 +2431,7 @@ function compressImage(file){return new Promise(function(resolve,reject){
     encodeCanvas(cv,ow,oh,IMG_Q);
   }
 
-  function imageFromDataURL(blob,next){
-    var fr=new FileReader(), finished=false;
-    fr.onerror=function(){if(!finished){finished=true;next();}};
-    fr.onload=function(){
-      if(finished)return;
-      var data=fr.result;
-      if(!data){finished=true;next();return;}
-      var img=new Image();
-      var timer=setTimeout(function(){if(!finished){finished=true;next();}},10000);
-      img.onload=function(){if(finished)return;finished=true;clearTimeout(timer);drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
-      img.onerror=function(){if(finished)return;finished=true;clearTimeout(timer);next();};
-      img.src=data;
-    };
-    try{fr.readAsDataURL(blob);}catch(e){next();}
-  }
-
-  function imageFromObjectURL(blob,next){
-    var url='';
-    try{url=URL.createObjectURL(blob);}catch(e){}
-    if(!url){next();return;}
-    var img=new Image(),finished=false;
-    var timer=setTimeout(function(){if(!finished){finished=true;try{URL.revokeObjectURL(url);}catch(e){}next();}},10000);
-    img.onload=function(){if(finished)return;finished=true;clearTimeout(timer);try{URL.revokeObjectURL(url);}catch(e){}drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
-    img.onerror=function(){if(finished)return;finished=true;clearTimeout(timer);try{URL.revokeObjectURL(url);}catch(e){}next();};
-    img.src=url;
-  }
-
-  function decodeBlob(blob){
+  function decodeNormal(blob, finalFail){
     var stage=0;
     function next(){
       if(settled)return;
@@ -2468,38 +2441,86 @@ function compressImage(file){return new Promise(function(resolve,reject){
           createImageBitmap(blob).then(function(bm){drawSource(bm,bm.width,bm.height);}).catch(next);
         }catch(e){next();}
       }else if(stage<=2){
-        imageFromDataURL(blob,next);
+        var fr=new FileReader(),finished=false;
+        fr.onerror=function(){if(!finished){finished=true;next();}};
+        fr.onload=function(){
+          if(finished)return;
+          var data=fr.result;
+          if(!data){finished=true;next();return;}
+          var img=new Image();
+          var timer=setTimeout(function(){if(!finished){finished=true;next();}},12000);
+          img.onload=function(){if(finished)return;finished=true;clearTimeout(timer);drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
+          img.onerror=function(){if(finished)return;finished=true;clearTimeout(timer);next();};
+          img.src=data;
+        };
+        try{fr.readAsDataURL(blob);}catch(e){next();}
       }else if(stage<=3){
-        imageFromObjectURL(blob,next);
+        var url='';
+        try{url=URL.createObjectURL(blob);}catch(e){}
+        if(!url){next();return;}
+        var img2=new Image(),finished2=false;
+        var timer2=setTimeout(function(){if(!finished2){finished2=true;try{URL.revokeObjectURL(url);}catch(e){}next();}},12000);
+        img2.onload=function(){if(finished2)return;finished2=true;clearTimeout(timer2);try{URL.revokeObjectURL(url);}catch(e){}drawSource(img2,img2.naturalWidth||img2.width,img2.naturalHeight||img2.height);};
+        img2.onerror=function(){if(finished2)return;finished2=true;clearTimeout(timer2);try{URL.revokeObjectURL(url);}catch(e){}next();};
+        img2.src=url;
       }else{
-        fail(isHeic?'อุปกรณ์นี้อ่านภาพ HEIC/HEIF ไม่สำเร็จ กรุณาถ่ายใหม่อีกครั้ง':'เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');
+        finalFail();
       }
     }
     next();
   }
 
-  // บางเบราว์เซอร์มือถือคืน File จากกล้องเร็วกว่าที่หน้าเว็บจะอ่านได้เสถียร
-  // จึงคัดลอกไฟล์เข้า memory ก่อน และ retry การอ่านหนึ่งครั้ง (รองรับทั้ง iOS/Android)
-  function cloneAndDecode(attempt){
-    var reader=new FileReader();
-    reader.onload=function(){
-      try{
-        var buf=reader.result;
-        var blob=new Blob([buf],{type:file.type||'image/jpeg'});
-        decodeBlob(blob);
-      }catch(e){decodeBlob(file);}
-    };
-    reader.onerror=function(){
-      if(attempt<1){setTimeout(function(){cloneAndDecode(attempt+1);},350);}
-      else decodeBlob(file);
-    };
-    try{reader.readAsArrayBuffer(file);}catch(e){
-      if(attempt<1)setTimeout(function(){cloneAndDecode(attempt+1);},350);else decodeBlob(file);
-    }
+  function loadScriptOnce(src,id){
+    return new Promise(function(resolve,reject){
+      if(window.heic2any){resolve();return;}
+      var old=document.getElementById(id);
+      if(old){
+        var n=0, iv=setInterval(function(){
+          if(window.heic2any){clearInterval(iv);resolve();}
+          else if(++n>40){clearInterval(iv);reject(new Error('โหลดตัวแปลง HEIC ไม่สำเร็จ'));}
+        },150);
+        return;
+      }
+      var sc=document.createElement('script');
+      sc.id=id; sc.src=src; sc.async=true;
+      sc.onload=function(){window.heic2any?resolve():reject(new Error('ตัวแปลง HEIC ไม่พร้อม'));};
+      sc.onerror=function(){reject(new Error('โหลดตัวแปลง HEIC ไม่สำเร็จ'));};
+      document.head.appendChild(sc);
+    });
   }
-  setTimeout(function(){cloneAndDecode(0);},180);
-});}
 
+  function ensureHeicDecoder(){
+    if(window.heic2any)return Promise.resolve();
+    return loadScriptOnce('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js','wwt-heic2any-jsdelivr')
+      .catch(function(){
+        return loadScriptOnce('https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js','wwt-heic2any-unpkg');
+      });
+  }
+
+  function convertHeic(){
+    ensureHeicDecoder().then(function(){
+      return window.heic2any({blob:file,toType:'image/jpeg',quality:0.86});
+    }).then(function(out){
+      if(Array.isArray(out))out=out[0];
+      if(!out||!out.size)throw new Error('แปลง HEIC ไม่สำเร็จ');
+      decodeNormal(out,function(){fail('แปลงภาพ HEIC/HEIF เป็น JPEG ไม่สำเร็จ กรุณาถ่ายใหม่');});
+    }).catch(function(){
+      // รอบสุดท้าย: บางเครื่องเบราว์เซอร์เปิด HEIC ได้เอง แม้ library แปลงไม่สำเร็จ
+      decodeNormal(file,function(){fail('อุปกรณ์นี้ยังอ่านภาพ HEIC/HEIF ไม่ได้ กรุณาถ่ายใหม่อีกครั้ง');});
+    });
+  }
+
+  // HEIC/HEIF ต้องแปลงจริงก่อน ไม่ใช่แค่หวังให้ browser decode เอง
+  if(isHeic){
+    setTimeout(convertHeic,120);
+    return;
+  }
+
+  // รูปทั่วไปอ่านผ่าน 3 วิธีเพื่อรองรับ Android/iOS หลายรุ่น
+  setTimeout(function(){
+    decodeNormal(file,function(){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');});
+  },120);
+});}
 function readExifDate(file){return new Promise(function(resolve){if(!file||file.type!=='image/jpeg')return resolve({hasExif:false,shootTime:null});var reader=new FileReader();reader.onload=function(e){try{var buf=e.target.result,view=new DataView(buf);if(view.getUint16(0)!==0xFFD8)return resolve({hasExif:false,shootTime:null});var offset=2,len=buf.byteLength;while(offset<len-2){var marker=view.getUint16(offset);if(marker===0xFFE1){var segLen=view.getUint16(offset+2),hdr='';for(var i=0;i<4;i++)hdr+=String.fromCharCode(view.getUint8(offset+4+i));if(hdr!=='Exif'){offset+=2+segLen;continue;}var tOff=offset+10,little=view.getUint16(tOff)===0x4949,iOff=tOff+view.getUint32(tOff+4,little),nE=view.getUint16(iOff,little),exifOff=null;for(var j=0;j<nE;j++){var eO=iOff+2+j*12;if(eO+12>len)break;if(view.getUint16(eO,little)===0x8769)exifOff=tOff+view.getUint32(eO+8,little);}if(exifOff){try{var en=view.getUint16(exifOff,little);for(var j2=0;j2<en;j2++){var eO2=exifOff+2+j2*12;if(eO2+12>len)break;if(view.getUint16(eO2,little)===0x9003){var dvO=view.getUint32(eO2+8,little),ds='';for(var k=0;k<19;k++)ds+=String.fromCharCode(view.getUint8(tOff+dvO+k));var pts=ds.split(' ');if(pts.length===2){var dp=pts[0].split(':'),tp=pts[1].split(':');var dt=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]),parseInt(tp[0]),parseInt(tp[1]),parseInt(tp[2]));return resolve({hasExif:true,shootTime:dt.getTime()});}return resolve({hasExif:true,shootTime:null});}}}catch(ee){}}return resolve({hasExif:true,shootTime:null});}if((marker&0xFF00)!==0xFF00)break;offset+=2+view.getUint16(offset+2);}resolve({hasExif:false,shootTime:null});}catch(err){resolve({hasExif:false,shootTime:null});}};reader.onerror=function(){resolve({hasExif:false,shootTime:null});};var slice=file.slice?file.slice(0,131072):file;reader.readAsArrayBuffer(slice);});}
 
 // ══════════════════════════════════════════════════════════════
