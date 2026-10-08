@@ -31,7 +31,7 @@
 <script id="release-cache-refresh-v67">
 (function(){
   'use strict';
-  var VERSION='wwt-ui-v7.1-device-hardgate-20261008';
+  var VERSION='wwt-ui-v7.3-minimal-fix-20261008';
   try{
     if(localStorage.getItem('wwt_release_version')!==VERSION){
       localStorage.setItem('wwt_release_version',VERSION);
@@ -2528,6 +2528,13 @@ function compressImage(file){return new Promise(function(resolve,reject){
   // ถ้า browser เปิดภาพเพื่อย่อไม่ได้ ให้ส่งไฟล์ต้นฉบับแทน (เฉพาะ JPEG/PNG/WebP)
   function rawFileFallback(){
     var mime=String(file.type||'').toLowerCase();
+    var name=String(file.name||'').toLowerCase();
+    // Android บางรุ่นคืน file.type ว่าง แม้ไฟล์จากกล้องเป็น JPEG จริง
+    if(!mime){
+      if(/\.png$/.test(name)) mime='image/png';
+      else if(/\.webp$/.test(name)) mime='image/webp';
+      else if(/\.(jpe?g|jfif)$/.test(name) || !name) mime='image/jpeg';
+    }
     if(!/^image\/(jpeg|jpg|png|webp)$/.test(mime)){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');return;}
     var frRaw=new FileReader();
     frRaw.onerror=function(){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');};
