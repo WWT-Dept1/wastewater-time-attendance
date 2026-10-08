@@ -17,7 +17,7 @@
   }catch(e){}
 })();
 </script>
-<meta name="app-version" content="ExternalUI v7.0 STABLE-CORE">
+<meta name="app-version" content="ExternalUI v7.1 STABLE-CORE DEVICE-HARDGATE">
 <meta charset="UTF-8"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
@@ -31,7 +31,7 @@
 <script id="release-cache-refresh-v67">
 (function(){
   'use strict';
-  var VERSION='wwt-ui-v7.0';
+  var VERSION='wwt-ui-v7.1-device-hardgate-20261008';
   try{
     if(localStorage.getItem('wwt_release_version')!==VERSION){
       localStorage.setItem('wwt_release_version',VERSION);
@@ -2823,6 +2823,12 @@ function handleSubmit(){
       showToast('⏰ ภาพเก่าเกิน 5 นาทีแล้ว กรุณาถ่ายภาพใหม่แล้วลองอีกครั้ง','error',7000);
       return;
     }
+    // v7.1 hard gate: never send attendance without a stable Device ID
+    if(!deviceReady || !currentDeviceId || String(currentDeviceId).trim().length < 10){
+      showToast('⛔ Device ID ยังไม่พร้อม ระบบยังไม่ส่งข้อมูล กรุณาปิดหน้าเว็บแล้วเปิดใหม่','error',7000);
+      auditIfIdentified_('DEVICE_ID_NOT_READY','หยุดก่อนส่ง saveRecord','deviceReady='+deviceReady+' idLen='+(currentDeviceId?String(currentDeviceId).length:0));
+      return;
+    }
     showLoading(true, currentCheckType===TYPE_OUT ? 'กำลังอัปโหลดและบันทึกเลิกงาน...' : 'กำลังอัปโหลดและบันทึกเข้างาน...');
 
     var payload = {
@@ -2850,6 +2856,7 @@ function handleSubmit(){
       bfHash        : currentBfHash,
       userAgent     : (navigator.userAgent || '').substring(0, 200),
       platform      : getPlatform(),
+      frontendBuild : 'v7.1-device-hardgate-20261008',
       requestId     : ['scan-v7',currentDeviceId||'no-device',fn,ln,currentCheckType,String(photoCapturedTs||'')].join('|')
     };
 
