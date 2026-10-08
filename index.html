@@ -17,7 +17,7 @@
   }catch(e){}
 })();
 </script>
-<meta name="app-version" content="ExternalUI v7.0 STABLE-CORE DEVICE-PHOTO-FIX">
+<meta name="app-version" content="ExternalUI v7.0 STABLE-CORE">
 <meta charset="UTF-8"/>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta http-equiv="Pragma" content="no-cache"/>
@@ -1594,7 +1594,6 @@ var currentBfHash    = '';
 var currentUaHash    = '';
 var currentAudioHash = '';
 var deviceReady      = false;
-var deviceInitPromise = null;
 
 // ── Hash function ─────────────────────────────────────────────
 function hashStr(str) {
@@ -1774,65 +1773,47 @@ function updateDeviceBadge() {
 }
 
 // ── Init Device — sync ก่อน async ────────────────────────────
-// FIX: Android/Chrome บางเครื่อง IndexedDB ค้าง ทำให้ currentDeviceId ยังว่างตอนกดบันทึก
 function initDevice() {
-  if (deviceReady && currentDeviceId && currentDeviceId.length >= 20) {
-    return Promise.resolve(currentDeviceId);
-  }
-  if (deviceInitPromise) return deviceInitPromise;
 
   currentUaHash = buildUaHash();
-  currentBfHash = buildHardwareFingerprint('pending');
+
+  currentBfHash   = buildHardwareFingerprint('pending');
   currentAudioHash = 'pending';
 
-  deviceInitPromise = new Promise(function(resolve) {
-    var finished = false;
-    var timer = null;
+  var lsId = null;
+  try { lsId = localStorage.getItem(DEVICE_ID_KEY); } catch(e) {}
 
-    function finishWithId(id) {
-      if (finished) return;
-      finished = true;
-      if (timer) clearTimeout(timer);
-
-      if (id && String(id).length >= 20) {
-        currentDeviceId = String(id);
-        try { localStorage.setItem(DEVICE_ID_KEY, currentDeviceId); } catch(e) {}
-      } else {
-        _createNewDeviceId();
-      }
-
-      deviceReady = !!(currentDeviceId && currentDeviceId.length >= 20);
-      updateDeviceBadge();
-      _updateAudioInBackground();
-      resolve(currentDeviceId || '');
-    }
-
-    var lsId = null;
-    try { lsId = localStorage.getItem(DEVICE_ID_KEY); } catch(e) {}
-    if (lsId && lsId.length >= 20) {
-      finishWithId(lsId);
-      return;
-    }
-
-    timer = setTimeout(function() {
-      finishWithId(null);
-    }, 1500);
-
-    idbGet(DEVICE_ID_KEY_IDB).then(function(idbId) {
-      finishWithId(idbId);
-    }).catch(function() {
-      finishWithId(null);
-    });
-  });
-
-  return deviceInitPromise;
-}
-
-function ensureDeviceReady_() {
-  if (deviceReady && currentDeviceId && currentDeviceId.length >= 20) {
-    return Promise.resolve(currentDeviceId);
+  if (lsId && lsId.length >= 20) {
+    currentDeviceId = lsId;
+    deviceReady = true;
+    updateDeviceBadge();
+    _updateAudioInBackground();
+    return;
   }
-  return initDevice();
+
+  // Android บางรุ่นเปิด IndexedDB ค้างได้: รอไม่เกิน 900 ms แล้วสร้าง ID ให้พร้อมใช้งาน
+  var finished=false;
+  function finishWith(id){
+    if(finished)return;
+    finished=true;
+    if(id && String(id).length>=20){
+      currentDeviceId=String(id);
+      try{localStorage.setItem(DEVICE_ID_KEY,currentDeviceId);}catch(e){}
+    }else{
+      _createNewDeviceId();
+    }
+    deviceReady=!!(currentDeviceId && currentDeviceId.length>=10);
+    updateDeviceBadge();
+    _updateAudioInBackground();
+  }
+  var timer=setTimeout(function(){finishWith(null);},900);
+  idbGet(DEVICE_ID_KEY_IDB).then(function(idbId){
+    clearTimeout(timer);
+    finishWith(idbId);
+  }).catch(function(){
+    clearTimeout(timer);
+    finishWith(null);
+  });
 }
 
 function _createNewDeviceId() {
@@ -1858,7 +1839,7 @@ function _updateAudioInBackground() {
   }, 500);
 }
 
-ensureDeviceReady_().catch(function(){});
+initDevice();
 
 // ── State ─────────────────────────────────────────────────────
 var gpsOk=false,isMockDetected=false,isLoading=false;
@@ -2414,38 +2395,6 @@ function compressImage(file){return new Promise(function(resolve,reject){
   var fileType=String(file.type||'').toLowerCase();
   var isHeic=/heic|heif/.test(fileType)||/\.(heic|heif)$/.test(fileName);
 
-  // FIX Android: ถ้า browser decode/canvas เปิดภาพไม่ได้ แต่ไฟล์กล้องยังอ่านเป็น bytes ได้
-  // ให้ส่งไฟล์ JPEG/PNG/WebP ต้นฉบับแทน ไม่ทำให้รายการบันทึกล้ม
-  function rawImageFallback(blob){
-    var mime=String(blob.type||fileType||'').toLowerCase();
-    if(!/^image\/(jpeg|jpg|png|webp)$/.test(mime)){
-      fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');
-      return;
-    }
-    if(blob.size > 12*1024*1024){
-      fail('รูปมีขนาดใหญ่เกินไป กรุณาถ่ายภาพใหม่อีกครั้ง');
-      return;
-    }
-    var fr0=new FileReader();
-    fr0.onerror=function(){fail('อ่านไฟล์รูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');};
-    fr0.onload=function(){
-      var du0=String(fr0.result||'');
-      var comma=du0.indexOf(',');
-      if(comma<0 || du0.length<50){fail('อ่านไฟล์รูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');return;}
-      done({
-        base64:du0.substring(comma+1),
-        mime:(mime==='image/jpg'?'image/jpeg':mime),
-        widthOut:0,
-        heightOut:0,
-        sizeKB:Math.round(blob.size/1024),
-        quality:null,
-        dataURL:du0,
-        rawFallback:true
-      });
-    };
-    try{fr0.readAsDataURL(blob);}catch(e){fail('อ่านไฟล์รูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');}
-  }
-
   function blobToResult(blob,w,h,q){
     var fr=new FileReader();
     fr.onerror=function(){fail('อ่านรูปที่บีบอัดไม่ได้');};
@@ -2576,9 +2525,22 @@ function compressImage(file){return new Promise(function(resolve,reject){
   }
 
   // รูปทั่วไปอ่านผ่าน 3 วิธีเพื่อรองรับ Android/iOS หลายรุ่น
-  // ถ้าทุก decoder ล้มเหลว ใช้ bytes ต้นฉบับของ JPEG/PNG/WebP เป็น fallback
+  // ถ้า browser เปิดภาพเพื่อย่อไม่ได้ ให้ส่งไฟล์ต้นฉบับแทน (เฉพาะ JPEG/PNG/WebP)
+  function rawFileFallback(){
+    var mime=String(file.type||'').toLowerCase();
+    if(!/^image\/(jpeg|jpg|png|webp)$/.test(mime)){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');return;}
+    var frRaw=new FileReader();
+    frRaw.onerror=function(){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');};
+    frRaw.onload=function(){
+      var du=String(frRaw.result||'');
+      var comma=du.indexOf(',');
+      if(comma<0 || du.length<100){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');return;}
+      done({base64:du.substring(comma+1),mime:mime==='image/jpg'?'image/jpeg':mime,widthOut:0,heightOut:0,sizeKB:Math.round(file.size/1024),quality:1,dataURL:du,rawFallback:true});
+    };
+    try{frRaw.readAsDataURL(file);}catch(e){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');}
+  }
   setTimeout(function(){
-    decodeNormal(file,function(){rawImageFallback(file);});
+    decodeNormal(file,rawFileFallback);
   },120);
 });}
 function readExifDate(file){return new Promise(function(resolve){if(!file||file.type!=='image/jpeg')return resolve({hasExif:false,shootTime:null});var reader=new FileReader();reader.onload=function(e){try{var buf=e.target.result,view=new DataView(buf);if(view.getUint16(0)!==0xFFD8)return resolve({hasExif:false,shootTime:null});var offset=2,len=buf.byteLength;while(offset<len-2){var marker=view.getUint16(offset);if(marker===0xFFE1){var segLen=view.getUint16(offset+2),hdr='';for(var i=0;i<4;i++)hdr+=String.fromCharCode(view.getUint8(offset+4+i));if(hdr!=='Exif'){offset+=2+segLen;continue;}var tOff=offset+10,little=view.getUint16(tOff)===0x4949,iOff=tOff+view.getUint32(tOff+4,little),nE=view.getUint16(iOff,little),exifOff=null;for(var j=0;j<nE;j++){var eO=iOff+2+j*12;if(eO+12>len)break;if(view.getUint16(eO,little)===0x8769)exifOff=tOff+view.getUint32(eO+8,little);}if(exifOff){try{var en=view.getUint16(exifOff,little);for(var j2=0;j2<en;j2++){var eO2=exifOff+2+j2*12;if(eO2+12>len)break;if(view.getUint16(eO2,little)===0x9003){var dvO=view.getUint32(eO2+8,little),ds='';for(var k=0;k<19;k++)ds+=String.fromCharCode(view.getUint8(tOff+dvO+k));var pts=ds.split(' ');if(pts.length===2){var dp=pts[0].split(':'),tp=pts[1].split(':');var dt=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]),parseInt(tp[0]),parseInt(tp[1]),parseInt(tp[2]));return resolve({hasExif:true,shootTime:dt.getTime()});}return resolve({hasExif:true,shootTime:null});}}}catch(ee){}}return resolve({hasExif:true,shootTime:null});}if((marker&0xFF00)!==0xFF00)break;offset+=2+view.getUint16(offset+2);}resolve({hasExif:false,shootTime:null});}catch(err){resolve({hasExif:false,shootTime:null});}};reader.onerror=function(){resolve({hasExif:false,shootTime:null});};var slice=file.slice?file.slice(0,131072):file;reader.readAsArrayBuffer(slice);});}
@@ -2813,20 +2775,6 @@ function acquireGpsForSubmitV70_(){
 }
 function handleSubmit(){
   if(isLoading)return;
-
-  // FIX: ห้ามส่ง saveRecord จนกว่า Device ID จะพร้อม
-  if(!deviceReady || !currentDeviceId || currentDeviceId.length < 20){
-    showToast('📱 กำลังเตรียม Device ID กรุณารอสักครู่...','',2500);
-    ensureDeviceReady_().then(function(id){
-      updateBtn();
-      if(id && id.length>=20) setTimeout(handleSubmit,50);
-      else showToast('⛔ ไม่สามารถสร้าง Device ID ได้ กรุณาปิดและเปิดหน้าเว็บใหม่','error',6000);
-    }).catch(function(){
-      showToast('⛔ ไม่สามารถเตรียม Device ID ได้ กรุณาปิดและเปิดหน้าเว็บใหม่','error',6000);
-    });
-    return;
-  }
-
   if(isMockDetected){auditIfIdentified_('MOCK_LOCATION_CLIENT','ตรวจพบ Mock Location ก่อนกดบันทึก');showToast('🚨 ตรวจพบ Mock Location','error',6000);return;}
   if(!gpsOk||currentLat===null||currentLng===null){
     if(gpsSubmitRetryBusyV70)return;
@@ -2844,6 +2792,11 @@ function handleSubmit(){
   var fn=(NS.firstName||trigger.dataset.selectedFirst||'').trim();
   var ln=(NS.lastName||trigger.dataset.selectedLast||'').trim();
   if(!fn||!ln){$('nsTrigger').classList.add('required-miss');showToast('กรุณาเลือกชื่อ-นามสกุลก่อนบันทึก','error',5000);$('nameSelector').scrollIntoView({behavior:'smooth',block:'center'});return;}
+  if(!deviceReady || !currentDeviceId || String(currentDeviceId).length<10){
+    initDevice();
+    showToast('⏳ กำลังเตรียม Device ID กรุณากดบันทึกอีกครั้งใน 1 วินาที','',2200);
+    return;
+  }
   if(!imageBase64||!imageValid){auditIfIdentified_(!imageBase64?'PHOTO_MISSING':'PHOTO_INVALID',!imageBase64?'ยังไม่ได้ถ่ายภาพหน้างาน':'รูปภาพไม่ผ่านการตรวจสอบ');uploadZone.classList.add('required-missing');uploadHint.classList.add('show');showToast(!imageBase64?'📸 กรุณาถ่ายภาพก่อนบันทึก':'❌ รูปไม่ผ่านการตรวจสอบ','error',5000);uploadZone.scrollIntoView({behavior:'smooth',block:'center'});return;}
   if(!photoCapturedTs){auditIfIdentified_('PHOTO_TIMESTAMP_MISSING','ไม่พบเวลาที่ถ่ายภาพ');uploadZone.classList.add('required-missing');uploadHint.classList.add('show');showToast('❌ ไม่พบเวลาที่ถ่ายภาพ กรุณาถ่ายภาพใหม่','error',6000);uploadZone.scrollIntoView({behavior:'smooth',block:'center'});return;}
   var photoAgeNow=Date.now()-photoCapturedTs;
