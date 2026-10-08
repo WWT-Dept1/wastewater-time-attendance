@@ -1791,22 +1791,7 @@ function initDevice() {
     return;
   }
 
-  // v7.0 FIX DEVICE ONLY: IndexedDB บาง Android/Private mode อาจค้าง
-  // ห้ามปล่อยให้บันทึกโดย deviceId ว่าง — รอ ID เดิมก่อน แล้วค่อยสร้างใหม่เมื่อจำเป็นจริง ๆ
-  var finished = false;
-  var fallbackTimer = setTimeout(function(){
-    if (finished || currentDeviceId) return;
-    finished = true;
-    _createNewDeviceId();
-    deviceReady = true;
-    updateDeviceBadge();
-    _updateAudioInBackground();
-  }, 1800);
-
   idbGet(DEVICE_ID_KEY_IDB).then(function(idbId) {
-    if (finished) return;
-    finished = true;
-    clearTimeout(fallbackTimer);
     if (idbId && idbId.length >= 20) {
       currentDeviceId = idbId;
       try { localStorage.setItem(DEVICE_ID_KEY, idbId); } catch(e) {}
@@ -1821,13 +1806,9 @@ function initDevice() {
     updateDeviceBadge();
     _updateAudioInBackground();
   }).catch(function() {
-    if (finished) return;
-    finished = true;
-    clearTimeout(fallbackTimer);
     _createNewDeviceId();
     deviceReady = true;
     updateDeviceBadge();
-    _updateAudioInBackground();
   });
 }
 
@@ -2399,47 +2380,151 @@ if(navigator.permissions&&navigator.permissions.query){
 
 // ── Image Compress ────────────────────────────────────────────
 function compressImage(file){return new Promise(function(resolve,reject){
-  // v7.0 FIX PHOTO ONLY: กลับมาใช้ fallback แบบเวอร์ชันเดิมที่เสถียรบน Android
-  // ถ้า browser เปิดภาพเพื่อย่อไม่ได้ จะใช้ไฟล์ต้นฉบับแทน ไม่ตัดการบันทึกด้วย "เปิดรูปไม่ได้"
-  function resolveRaw(dataUrl){
-    if(!dataUrl||dataUrl.length<100){reject(new Error('อ่านไฟล์ไม่สำเร็จ'));return;}
-    var sKB=Math.round((dataUrl.length*3)/(4*1024));
-    resolve({base64:dataUrl.split(',')[1],mime:file.type||'image/jpeg',widthOut:0,heightOut:0,sizeKB:sKB,quality:1,dataURL:dataUrl});
-  }
-  function tryCanvas(img,origW,origH,fallbackDataUrl){
-    if(!origW||!origH){resolveRaw(fallbackDataUrl);return;}
-    var ratio=Math.min((IMG_MAX_W||1280)/origW,(IMG_MAX_H||1280)/origH,1);
-    var oW=Math.max(1,Math.round(origW*ratio)),oH=Math.max(1,Math.round(origH*ratio));
-    if(oW>4096||oH>4096){var s2=Math.min(4096/oW,4096/oH);oW=Math.round(oW*s2);oH=Math.round(oH*s2);}
-    var cv=document.createElement('canvas');cv.width=oW;cv.height=oH;
-    var ctx=cv.getContext('2d');if(!ctx){resolveRaw(fallbackDataUrl);return;}
-    ctx.fillStyle='#fff';ctx.fillRect(0,0,oW,oH);
-    try{ctx.drawImage(img,0,0,oW,oH);}catch(e){resolveRaw(fallbackDataUrl);return;}
-    var q=IMG_Q,dU='',sKB=9999,at=0;
-    do{
-      try{dU=cv.toDataURL('image/jpeg',q);}catch(e){resolveRaw(fallbackDataUrl);return;}
-      if(!dU||dU.length<50){resolveRaw(fallbackDataUrl);return;}
-      sKB=Math.round((dU.length*3)/(4*1024));at++;
-      if(sKB>IMG_MAX_KB&&q>IMG_MIN_Q)q=Math.max(q-0.08,IMG_MIN_Q);else break;
-    }while(at<6);
-    resolve({base64:dU.split(',')[1],mime:'image/jpeg',widthOut:oW,heightOut:oH,sizeKB:sKB,quality:q,dataURL:dU});
-  }
-  if(!file){reject(new Error('ไม่พบไฟล์ภาพ กรุณาถ่ายใหม่'));return;}
-  if(!file.size){reject(new Error('ไฟล์ภาพว่าง กรุณาถ่ายใหม่'));return;}
-  var reader=new FileReader();
-  reader.onerror=function(){reject(new Error('อ่านไฟล์ไม่ได้'));};
-  reader.onload=function(ev){
-    var dataUrl=ev.target.result;
-    if(!dataUrl||dataUrl.length<100){reject(new Error('อ่านไฟล์ไม่สำเร็จ'));return;}
-    var img=new Image(),settled=false;
-    var tmr=setTimeout(function(){if(settled)return;settled=true;resolveRaw(dataUrl);},10000);
-    img.onerror=function(){if(settled)return;settled=true;clearTimeout(tmr);resolveRaw(dataUrl);};
-    img.onload=function(){if(settled)return;settled=true;clearTimeout(tmr);tryCanvas(img,img.naturalWidth||img.width||0,img.naturalHeight||img.height||0,dataUrl);};
-    try{img.src=dataUrl;}catch(e){if(!settled){settled=true;clearTimeout(tmr);resolveRaw(dataUrl);}}
-  };
-  try{reader.readAsDataURL(file);}catch(e){reject(new Error('อ่านไฟล์ไม่ได้'));}
-});}
+  var MAX_W=IMG_MAX_W||1280, MAX_H=IMG_MAX_H||1280;
+  var settled=false;
+  function fail(msg){if(settled)return;settled=true;reject(new Error(msg));}
+  function done(v){if(settled)return;settled=true;resolve(v);}
+  if(!file){fail('ไม่พบไฟล์ภาพ กรุณาถ่ายใหม่');return;}
+  if(!file.size){fail('ไฟล์ภาพว่าง กรุณาถ่ายใหม่');return;}
 
+  var fileName=String(file.name||'').toLowerCase();
+  var fileType=String(file.type||'').toLowerCase();
+  var isHeic=/heic|heif/.test(fileType)||/\.(heic|heif)$/.test(fileName);
+
+  function blobToResult(blob,w,h,q){
+    var fr=new FileReader();
+    fr.onerror=function(){fail('อ่านรูปที่บีบอัดไม่ได้');};
+    fr.onload=function(){
+      var du=fr.result||'';
+      if(!du||du.length<50){fail('สร้างไฟล์ภาพไม่สำเร็จ');return;}
+      done({base64:du.split(',')[1],mime:'image/jpeg',widthOut:w,heightOut:h,sizeKB:Math.round(blob.size/1024),quality:q,dataURL:du});
+    };
+    try{fr.readAsDataURL(blob);}catch(e){fail('อ่านรูปที่บีบอัดไม่ได้');}
+  }
+
+  function encodeCanvas(cv,w,h,q){
+    if(!cv.toBlob){
+      try{
+        var du=cv.toDataURL('image/jpeg',q);
+        var kb=Math.round((du.length*3)/(4*1024));
+        done({base64:du.split(',')[1],mime:'image/jpeg',widthOut:w,heightOut:h,sizeKB:kb,quality:q,dataURL:du});
+      }catch(e){fail('บีบอัดรูปไม่สำเร็จ');}
+      return;
+    }
+    try{
+      cv.toBlob(function(blob){
+        if(!blob){fail('บีบอัดรูปไม่สำเร็จ');return;}
+        if(blob.size>IMG_MAX_KB*1024 && q>IMG_MIN_Q){
+          var q2=Math.max(IMG_MIN_Q,q-0.16);
+          cv.toBlob(function(blob2){blobToResult(blob2||blob,w,h,q2);},'image/jpeg',q2);
+        }else blobToResult(blob,w,h,q);
+      },'image/jpeg',q);
+    }catch(e){fail('บีบอัดรูปไม่สำเร็จ');}
+  }
+
+  function drawSource(source,w,h){
+    w=Number(w)||0;h=Number(h)||0;
+    if(w<1||h<1){try{if(source&&source.close)source.close();}catch(e){} fail('อ่านขนาดรูปไม่ได้ กรุณาถ่ายใหม่');return;}
+    var ratio=Math.min(MAX_W/w,MAX_H/h,1), ow=Math.max(1,Math.round(w*ratio)), oh=Math.max(1,Math.round(h*ratio));
+    var cv=document.createElement('canvas');cv.width=ow;cv.height=oh;
+    var ctx=cv.getContext('2d',{alpha:false});
+    if(!ctx){fail('อุปกรณ์ไม่รองรับการย่อรูป');return;}
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,ow,oh);
+    try{ctx.drawImage(source,0,0,ow,oh);}catch(e){try{if(source&&source.close)source.close();}catch(ee){} fail('ประมวลผลรูปไม่สำเร็จ');return;}
+    try{if(source&&typeof source.close==='function')source.close();}catch(e){}
+    encodeCanvas(cv,ow,oh,IMG_Q);
+  }
+
+  function decodeNormal(blob, finalFail){
+    var stage=0;
+    function next(){
+      if(settled)return;
+      stage++;
+      if(stage===1 && window.createImageBitmap){
+        try{
+          createImageBitmap(blob).then(function(bm){drawSource(bm,bm.width,bm.height);}).catch(next);
+        }catch(e){next();}
+      }else if(stage<=2){
+        var fr=new FileReader(),finished=false;
+        fr.onerror=function(){if(!finished){finished=true;next();}};
+        fr.onload=function(){
+          if(finished)return;
+          var data=fr.result;
+          if(!data){finished=true;next();return;}
+          var img=new Image();
+          var timer=setTimeout(function(){if(!finished){finished=true;next();}},12000);
+          img.onload=function(){if(finished)return;finished=true;clearTimeout(timer);drawSource(img,img.naturalWidth||img.width,img.naturalHeight||img.height);};
+          img.onerror=function(){if(finished)return;finished=true;clearTimeout(timer);next();};
+          img.src=data;
+        };
+        try{fr.readAsDataURL(blob);}catch(e){next();}
+      }else if(stage<=3){
+        var url='';
+        try{url=URL.createObjectURL(blob);}catch(e){}
+        if(!url){next();return;}
+        var img2=new Image(),finished2=false;
+        var timer2=setTimeout(function(){if(!finished2){finished2=true;try{URL.revokeObjectURL(url);}catch(e){}next();}},12000);
+        img2.onload=function(){if(finished2)return;finished2=true;clearTimeout(timer2);try{URL.revokeObjectURL(url);}catch(e){}drawSource(img2,img2.naturalWidth||img2.width,img2.naturalHeight||img2.height);};
+        img2.onerror=function(){if(finished2)return;finished2=true;clearTimeout(timer2);try{URL.revokeObjectURL(url);}catch(e){}next();};
+        img2.src=url;
+      }else{
+        finalFail();
+      }
+    }
+    next();
+  }
+
+  function loadScriptOnce(src,id){
+    return new Promise(function(resolve,reject){
+      if(window.heic2any){resolve();return;}
+      var old=document.getElementById(id);
+      if(old){
+        var n=0, iv=setInterval(function(){
+          if(window.heic2any){clearInterval(iv);resolve();}
+          else if(++n>40){clearInterval(iv);reject(new Error('โหลดตัวแปลง HEIC ไม่สำเร็จ'));}
+        },150);
+        return;
+      }
+      var sc=document.createElement('script');
+      sc.id=id; sc.src=src; sc.async=true;
+      sc.onload=function(){window.heic2any?resolve():reject(new Error('ตัวแปลง HEIC ไม่พร้อม'));};
+      sc.onerror=function(){reject(new Error('โหลดตัวแปลง HEIC ไม่สำเร็จ'));};
+      document.head.appendChild(sc);
+    });
+  }
+
+  function ensureHeicDecoder(){
+    if(window.heic2any)return Promise.resolve();
+    return loadScriptOnce('https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js','wwt-heic2any-jsdelivr')
+      .catch(function(){
+        return loadScriptOnce('https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js','wwt-heic2any-unpkg');
+      });
+  }
+
+  function convertHeic(){
+    ensureHeicDecoder().then(function(){
+      return window.heic2any({blob:file,toType:'image/jpeg',quality:0.86});
+    }).then(function(out){
+      if(Array.isArray(out))out=out[0];
+      if(!out||!out.size)throw new Error('แปลง HEIC ไม่สำเร็จ');
+      decodeNormal(out,function(){fail('แปลงภาพ HEIC/HEIF เป็น JPEG ไม่สำเร็จ กรุณาถ่ายใหม่');});
+    }).catch(function(){
+      // รอบสุดท้าย: บางเครื่องเบราว์เซอร์เปิด HEIC ได้เอง แม้ library แปลงไม่สำเร็จ
+      decodeNormal(file,function(){fail('อุปกรณ์นี้ยังอ่านภาพ HEIC/HEIF ไม่ได้ กรุณาถ่ายใหม่อีกครั้ง');});
+    });
+  }
+
+  // HEIC/HEIF ต้องแปลงจริงก่อน ไม่ใช่แค่หวังให้ browser decode เอง
+  if(isHeic){
+    setTimeout(convertHeic,120);
+    return;
+  }
+
+  // รูปทั่วไปอ่านผ่าน 3 วิธีเพื่อรองรับ Android/iOS หลายรุ่น
+  setTimeout(function(){
+    decodeNormal(file,function(){fail('เปิดรูปไม่ได้ กรุณาถ่ายภาพใหม่อีกครั้ง');});
+  },120);
+});}
 function readExifDate(file){return new Promise(function(resolve){if(!file||file.type!=='image/jpeg')return resolve({hasExif:false,shootTime:null});var reader=new FileReader();reader.onload=function(e){try{var buf=e.target.result,view=new DataView(buf);if(view.getUint16(0)!==0xFFD8)return resolve({hasExif:false,shootTime:null});var offset=2,len=buf.byteLength;while(offset<len-2){var marker=view.getUint16(offset);if(marker===0xFFE1){var segLen=view.getUint16(offset+2),hdr='';for(var i=0;i<4;i++)hdr+=String.fromCharCode(view.getUint8(offset+4+i));if(hdr!=='Exif'){offset+=2+segLen;continue;}var tOff=offset+10,little=view.getUint16(tOff)===0x4949,iOff=tOff+view.getUint32(tOff+4,little),nE=view.getUint16(iOff,little),exifOff=null;for(var j=0;j<nE;j++){var eO=iOff+2+j*12;if(eO+12>len)break;if(view.getUint16(eO,little)===0x8769)exifOff=tOff+view.getUint32(eO+8,little);}if(exifOff){try{var en=view.getUint16(exifOff,little);for(var j2=0;j2<en;j2++){var eO2=exifOff+2+j2*12;if(eO2+12>len)break;if(view.getUint16(eO2,little)===0x9003){var dvO=view.getUint32(eO2+8,little),ds='';for(var k=0;k<19;k++)ds+=String.fromCharCode(view.getUint8(tOff+dvO+k));var pts=ds.split(' ');if(pts.length===2){var dp=pts[0].split(':'),tp=pts[1].split(':');var dt=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]),parseInt(tp[0]),parseInt(tp[1]),parseInt(tp[2]));return resolve({hasExif:true,shootTime:dt.getTime()});}return resolve({hasExif:true,shootTime:null});}}}catch(ee){}}return resolve({hasExif:true,shootTime:null});}if((marker&0xFF00)!==0xFF00)break;offset+=2+view.getUint16(offset+2);}resolve({hasExif:false,shootTime:null});}catch(err){resolve({hasExif:false,shootTime:null});}};reader.onerror=function(){resolve({hasExif:false,shootTime:null});};var slice=file.slice?file.slice(0,131072):file;reader.readAsArrayBuffer(slice);});}
 
 // ══════════════════════════════════════════════════════════════
@@ -2672,12 +2757,6 @@ function acquireGpsForSubmitV70_(){
 }
 function handleSubmit(){
   if(isLoading)return;
-  // v7.0 FIX DEVICE ONLY: ไม่อนุญาตให้ส่ง payload ถ้า Device ID ยังไม่พร้อม
-  if(!deviceReady || !currentDeviceId || currentDeviceId.length < 20){
-    try{initDevice();}catch(e){}
-    showToast('⏳ กำลังเตรียม Device ID กรุณากดบันทึกอีกครั้งใน 1–2 วินาที','',3000);
-    return;
-  }
   if(isMockDetected){auditIfIdentified_('MOCK_LOCATION_CLIENT','ตรวจพบ Mock Location ก่อนกดบันทึก');showToast('🚨 ตรวจพบ Mock Location','error',6000);return;}
   if(!gpsOk||currentLat===null||currentLng===null){
     if(gpsSubmitRetryBusyV70)return;
